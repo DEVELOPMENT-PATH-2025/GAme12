@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Typing Racer 3D - Android Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background: #050505; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            touch-action: none;
+        }
+        #root { width: 100vw; height: 100vh; }
+        canvas { display: block; touch-action: none; }
+        /* Hide scrollbars */
+        ::-webkit-scrollbar { display: none; }
+        * { -ms-overflow-style: none; scrollbar-width: none; outline: none; }
+        
+        /* Fix for mobile keyboard pushing layout */
+        .game-ui {
+            height: 100%;
+            height: -webkit-fill-available;
+        }
+    </style>
+    <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@19?bundle",
+        "react-dom": "https://esm.sh/react-dom@19?bundle",
+        "react-dom/client": "https://esm.sh/react-dom@19/client?bundle",
+        "three": "https://esm.sh/three@0.183.2",
+        "@react-three/fiber": "https://esm.sh/@react-three/fiber@9?external=react,three",
+        "@react-three/drei": "https://esm.sh/@react-three/drei@10?external=react,three,@react-three/fiber",
+        "zustand": "https://esm.sh/zustand@5?bundle",
+        "lucide-react": "https://esm.sh/lucide-react?bundle",
+        "framer-motion": "https://esm.sh/framer-motion@12?external=react",
+        "clsx": "https://esm.sh/clsx",
+        "tailwind-merge": "https://esm.sh/tailwind-merge",
+        "htm": "https://esm.sh/htm"
+      }
+    }
+    </script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module">
+        import React, { useEffect, useRef, useState, Suspense, useCallback } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import * as THREE from 'three';
+        import { Canvas, useFrame, useThree } from '@react-three/fiber';
+        import { PerspectiveCamera, Sky, Stars, Loader } from '@react-three/drei';
+        import { create } from 'zustand';
+        import { Trophy, Timer, Target, Zap, RotateCcw, Play, Keyboard } from 'lucide-react';
+        import { motion, AnimatePresence } from 'framer-motion';
+        import { clsx } from 'clsx';
+        import { twMerge } from 'tailwind-merge';
+        import htm from 'htm';
+
+        const h = htm.bind(React.createElement);
+
+        function cn(...inputs) { return twMerge(clsx(inputs)); }
+
+        const WORDS = ["react", "three", "fiber", "zustand", "typing", "racer", "mobile", "android", "keyboard", "velocity", "ghost", "camera", "smooth", "infinite", "track", "accuracy", "streak", "performance", "state", "logic", "environment", "coding", "developer", "engine", "graphics", "shader", "material", "mesh", "geometry", "vector", "position", "rotation", "scale", "animation", "frame", "request", "permission", "metadata", "package", "dependency", "import", "export", "default", "function", "component", "interface", "type", "string", "number", "boolean", "array", "object", "const", "let", "var", "async", "await", "promise", "fetch", "response", "json", "error", "catch", "finally"];
+        const getRandomWord = () => WORDS[Math.floor(Math.random() * WORDS.length)];
+
+        const useGameStore = create((set, get) => ({
+            status: 'idle',
+            currentWord: getRandomWord(),
+            typedChars: '',
+            correctCharsCount: 0,
+            totalKeystrokes: 0,
+            startTime: null,
+            endTime: null,
+            wpm: 0,
+            accuracy: 0,
+            streak: 0,
+            maxStreak: 0,
+            playerPosition: 0,
+            ghostPosition: 0,
+            targetWPM: 40,
+            timeLeft: 60,
+            startGame: () => set({ status: 'racing', startTime: Date.now(), timeLeft: 60, playerPosition: 0, ghostPosition: 0, correctCharsCount: 0, totalKeystrokes: 0, wpm: 0, accuracy: 0, streak: 0, maxStreak: 0, typedChars: '', currentWord: getRandomWord() }),
+            resetGame: () => set({ status: 'idle', playerPosition: 0, ghostPosition: 0, timeLeft: 60, typedChars: '', currentWord: getRandomWord() }),
+            handleInput: (input) => {
+                const { currentWord, typedChars, status, correctCharsCount, totalKeystrokes, streak, maxStreak } = get();
+                if (status !== 'racing') return;
+                
+                // Normalize input for mobile (remove auto-correct spaces etc)
+                const newTypedChars = input.toLowerCase().trim();
+                const isCorrect = currentWord.startsWith(newTypedChars);
+                
+                let newCorrectCharsCount = correctCharsCount;
+                let newStreak = streak;
+                let newMaxStreak = maxStreak;
+
+                if (isCorrect && newTypedChars.length > typedChars.length) {
+                    newCorrectCharsCount += 1;
+                    newStreak += 1;
+                    newMaxStreak = Math.max(newMaxStreak, newStreak);
+                } else if (!isCorrect && newTypedChars.length > typedChars.length) {
+                    newStreak = 0;
+                }
+
+                if (newTypedChars === currentWord) {
+                    set({ currentWord: getRandomWord(), typedChars: '', correctCharsCount: newCorrectCharsCount, totalKeystrokes: totalKeystrokes + 1, streak: newStreak, maxStreak: newMaxStreak });
+                    return;
+                }
+                set({ typedChars: newTypedChars, correctCharsCount: newCorrectCharsCount, totalKeystrokes: totalKeystrokes + 1, streak: newStreak, maxStreak: newMaxStreak });
+            },
+            updatePositions: (delta) => {
+                const { status, playerPosition, ghostPosition, targetWPM, correctCharsCount } = get();
+                if (status !== 'racing') return;
+                const ghostCharsPerSecond = (targetWPM * 5) / 60;
+                const newGhostPosition = ghostPosition + ghostCharsPerSecond * delta * 2;
+                set({ playerPosition: correctCharsCount * 2, ghostPosition: newGhostPosition });
+            },
+            tick: () => {
+                const { status, startTime, correctCharsCount, totalKeystrokes } = get();
+                if (status !== 'racing' || !startTime) return;
+                const now = Date.now();
+                const elapsedMinutes = (now - startTime) / 60000;
+                const newTimeLeft = Math.max(0, 60 - (now - startTime) / 1000);
+                const newWpm = elapsedMinutes > 0 ? Math.round((correctCharsCount / 5) / elapsedMinutes) : 0;
+                const newAccuracy = totalKeystrokes > 0 ? Math.round((correctCharsCount / totalKeystrokes) * 100) : 0;
+                if (newTimeLeft <= 0) {
+                    set({ status: 'finished', endTime: now, timeLeft: 0 });
+                } else {
+                    set({ wpm: newWpm, accuracy: newAccuracy, timeLeft: newTimeLeft });
+                }
+            }
+        }));
+
+        function Car({ position, color, opacity = 1 }) {
+            const meshRef = useRef();
+            useFrame((state) => {
+                if (meshRef.current) {
+                    meshRef.current.position.y = position[1] + Math.sin(state.clock.elapsedTime * 2) * 0.1;
+                    meshRef.current.rotation.z = Math.sin(state.clock.elapsedTime * 4) * 0.05;
+                }
+            });
+            return h('group', { ref: meshRef, position },
+                h('mesh', { position: [0, 0.7, 0] }, h('boxGeometry', { args: [2, 0.8, 4] }), h('meshStandardMaterial', { color, transparent: true, opacity })),
+                h('mesh', { position: [0, 1.4, -0.4] }, h('boxGeometry', { args: [1.6, 0.8, 2] }), h('meshStandardMaterial', { color, transparent: true, opacity })),
+                [[-1, 0.4, 1.2], [1, 0.4, 1.2], [-1, 0.4, -1.2], [1, 0.4, -1.2]].map((pos, i) => h('mesh', { key: i, position: pos, rotation: [0, 0, Math.PI / 2] }, h('cylinderGeometry', { args: [0.4, 0.4, 0.3, 16] }), h('meshStandardMaterial', { color: "#111", transparent: true, opacity }))),
+                [[0.7, 0.7, 2], [-0.7, 0.7, 2]].map((pos, i) => h('mesh', { key: i, position: pos }, h('boxGeometry', { args: [0.4, 0.2, 0.1] }), h('meshStandardMaterial', { color: "#fff", emissive: "#fff", emissiveIntensity: 2, transparent: true, opacity })))
+            );
+        }
+
+        function Track() {
+            const trackLength = 1000;
+            const trackWidth = 10;
+            return h('group', null,
+                h('mesh', { rotation: [-Math.PI / 2, 0, 0], position: [0, -0.1, trackLength / 2 - 10] }, h('planeGeometry', { args: [trackWidth, trackLength] }), h('meshStandardMaterial', { color: "#111" })),
+                h('mesh', { position: [-trackWidth / 2, 0.2, trackLength / 2 - 10] }, h('boxGeometry', { args: [0.2, 0.5, trackLength] }), h('meshStandardMaterial', { color: "#333" })),
+                h('mesh', { position: [trackWidth / 2, 0.2, trackLength / 2 - 10] }, h('boxGeometry', { args: [0.2, 0.5, trackLength] }), h('meshStandardMaterial', { color: "#333" })),
+                Array.from({ length: 100 }).map((_, i) => h('mesh', { key: i, rotation: [-Math.PI / 2, 0, 0], position: [0, 0.01, i * 10] }, h('planeGeometry', { args: [0.2, 2] }), h('meshStandardMaterial', { color: "#fff", emissive: "#fff", emissiveIntensity: 0.5 })))
+            );
+        }
+
+        function CameraFollow() {
+            const playerPosition = useGameStore((state) => state.playerPosition);
+            const { camera } = useThree();
+            const vec = new THREE.Vector3();
+            useFrame(() => {
+                const targetX = 0; const targetY = 5; const targetZ = playerPosition - 8;
+                vec.set(targetX, targetY, targetZ);
+                camera.position.lerp(vec, 0.1);
+                camera.lookAt(0, 1, playerPosition + 5);
+            });
+            return null;
+        }
+
+        function GameScene() {
+            const playerPosition = useGameStore((state) => state.playerPosition);
+            const ghostPosition = useGameStore((state) => state.ghostPosition);
+            const updatePositions = useGameStore((state) => state.updatePositions);
+            const tick = useGameStore((state) => state.tick);
+            useFrame((_, delta) => { updatePositions(delta); tick(); });
+            return h(React.Fragment, null,
+                h(PerspectiveCamera, { makeDefault: true, position: [0, 6, -12], fov: 60 }),
+                h(CameraFollow, null),
+                h('ambientLight', { intensity: 0.5 }),
+                h('pointLight', { position: [10, 10, 10], intensity: 1 }),
+                h('directionalLight', { position: [5, 10, 5], intensity: 1, castShadow: true }),
+                h(Sky, { sunPosition: [100, 20, 100], turbidity: 0.1, rayleigh: 0.5 }),
+                h(Stars, { radius: 100, depth: 50, count: 5000, factor: 4, saturation: 0, fade: true, speed: 1 }),
+                h(Track, null),
+                h(Car, { position: [0, 0, playerPosition], color: "#3b82f6" }),
+                h(Car, { position: [0, 0, ghostPosition], color: "#ef4444", opacity: 0.3 }),
+                h('gridHelper', { args: [200, 50, 0x222222, 0x111111], position: [0, -0.05, 100] })
+            );
+        }
+
+        function StatBox({ icon, label, value, color }) {
+            return h('div', { className: "bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-2" },
+                h('div', { className: cn("p-1 rounded-lg bg-white/5", color) }, icon),
+                h('div', { className: "flex flex-col" },
+                    h('span', { className: "text-[7px] font-bold text-white/40 uppercase tracking-wider" }, label),
+                    h('span', { className: cn("text-sm font-mono font-bold leading-none", color) }, value)
+                )
+            );
+        }
+
+        function ResultCard({ label, value, color }) {
+            return h('div', { className: "bg-white/5 p-3 rounded-xl border border-white/5 flex flex-col items-center" },
+                h('span', { className: "text-[8px] font-bold text-white/40 uppercase tracking-widest mb-1" }, label),
+                h('span', { className: cn("text-xl font-mono font-black", color) }, value)
+            );
+        }
+
+        function UI() {
+            const { status, currentWord, typedChars, handleInput, wpm, accuracy, timeLeft, streak, maxStreak, startGame, resetGame } = useGameStore();
+            const inputRef = useRef(null);
+            
+            const ensureFocus = useCallback(() => {
+                if (status === 'racing') {
+                    inputRef.current?.focus();
+                }
+            }, [status]);
+
+            useEffect(() => {
+                if (status === 'racing') {
+                    const interval = setInterval(ensureFocus, 500);
+                    return () => clearInterval(interval);
+                }
+            }, [status, ensureFocus]);
+
+            const startRace = () => { 
+                startGame(); 
+                setTimeout(() => inputRef.current?.focus(), 100); 
+            };
+
+            const isError = !currentWord.startsWith(typedChars);
+
+            return h('div', { 
+                className: "fixed inset-0 flex flex-col items-center p-4 z-10 game-ui", 
+                onClick: ensureFocus 
+            },
+                h('input', { 
+                    ref: inputRef, 
+                    type: "text", 
+                    value: typedChars, 
+                    onChange: (e) => handleInput(e.target.value), 
+                    className: "fixed top-[-100px] left-0 opacity-0", 
+                    autoComplete: "off", 
+                    autoCapitalize: "off", 
+                    spellCheck: "false",
+                    inputMode: "text"
+                }),
+                
+                h('div', { className: "w-full max-w-md flex justify-between items-start mb-auto pointer-events-none" },
+                    h('div', { className: "flex gap-2 pointer-events-auto" }, 
+                        h(StatBox, { icon: h(Zap, { size: 14 }), label: "WPM", value: wpm, color: "text-yellow-400" }), 
+                        h(StatBox, { icon: h(Target, { size: 14 }), label: "ACC", value: `${accuracy}%`, color: "text-green-400" })
+                    ),
+                    h('div', { className: "flex flex-col items-end gap-2 pointer-events-auto" }, 
+                        h(StatBox, { icon: h(Timer, { size: 14 }), label: "TIME", value: Math.ceil(timeLeft), color: "text-blue-400" }), 
+                        h('div', { className: "bg-black/60 backdrop-blur-md px-2 py-0.5 rounded-full border border-white/10 flex items-center gap-1.5" }, 
+                            h('span', { className: "text-[8px] font-bold text-white/50 uppercase tracking-wider" }, "Streak"), 
+                            h('span', { className: "text-xs font-mono font-bold text-orange-400" }, streak)
+                        )
+                    )
+                ),
+
+                h('div', { className: cn("w-full flex flex-col items-center justify-center flex-1", status === 'racing' ? "justify-end pb-24" : "justify-center") },
+                    h(AnimatePresence, { mode: "wait" },
+                        status === 'racing' && h(motion.div, { 
+                            key: "racing", 
+                            initial: { opacity: 0, y: 20 }, 
+                            animate: { opacity: 1, y: 0 }, 
+                            exit: { opacity: 0, scale: 0.9 }, 
+                            className: "w-full max-w-sm bg-black/80 backdrop-blur-xl p-6 rounded-2xl border border-white/10 shadow-2xl relative overflow-hidden pointer-events-auto" 
+                        },
+                            h('div', { className: "absolute top-0 left-0 h-1 bg-blue-500 transition-all duration-200", style: { width: `${(typedChars.length / currentWord.length) * 100}%` } }),
+                            h('div', { className: "flex flex-col items-center gap-4" },
+                                h('div', { className: "text-3xl font-mono tracking-widest flex flex-wrap justify-center" }, 
+                                    currentWord.split('').map((char, i) => { 
+                                        let color = "text-white/20"; 
+                                        if (i < typedChars.length) color = typedChars[i] === char ? "text-blue-400" : "text-red-500"; 
+                                        return h('span', { key: i, className: cn(color, "transition-colors duration-100") }, char); 
+                                    })
+                                ),
+                                h('div', { className: "text-[10px] text-white/40 uppercase tracking-[0.2em] font-bold" }, 
+                                    isError ? "Correct the error" : "Type to race"
+                                )
+                            )
+                        ),
+
+                        status === 'idle' && h(motion.div, { 
+                            key: "idle", 
+                            initial: { opacity: 0, scale: 0.9 }, 
+                            animate: { opacity: 1, scale: 1 }, 
+                            className: "bg-black/90 backdrop-blur-2xl p-8 rounded-[32px] border border-white/10 shadow-2xl pointer-events-auto flex flex-col items-center gap-6 text-center max-w-xs w-full" 
+                        },
+                            h('div', { className: "w-16 h-16 bg-blue-500 rounded-2xl flex items-center justify-center shadow-[0_0_30px_rgba(59,130,246,0.4)]" }, h(Play, { size: 32, className: "text-white fill-current" })),
+                            h('div', null, 
+                                h('h1', { className: "text-3xl font-black text-white mb-1 tracking-tight" }, "TYPING RACER"), 
+                                h('p', { className: "text-white/50 text-xs leading-relaxed" }, "Android Edition • High Performance")
+                            ),
+                            h('button', { 
+                                onClick: startRace, 
+                                className: "w-full py-4 bg-white text-black font-black rounded-xl hover:bg-blue-400 hover:text-white transition-all active:scale-95 flex items-center justify-center gap-2 group" 
+                            }, "START RACE", h(Zap, { size: 16 })),
+                            h('div', { className: "flex items-center gap-2 text-[10px] text-white/30 font-bold uppercase tracking-widest" }, 
+                                h(Keyboard, { size: 12 }), "Virtual Keyboard Required"
+                            )
+                        ),
+
+                        status === 'finished' && h(motion.div, { 
+                            key: "finished", 
+                            initial: { opacity: 0, scale: 0.9 }, 
+                            animate: { opacity: 1, scale: 1 }, 
+                            className: "bg-black/90 backdrop-blur-2xl p-8 rounded-[32px] border border-white/10 shadow-2xl pointer-events-auto flex flex-col items-center gap-6 text-center max-w-xs w-full" 
+                        },
+                            h('div', { className: "w-14 h-14 bg-yellow-500 rounded-2xl flex items-center justify-center shadow-[0_0_20px_rgba(234,179,8,0.3)]" }, h(Trophy, { size: 28, className: "text-white" })),
+                            h('div', { className: "w-full grid grid-cols-2 gap-3" }, 
+                                h(ResultCard, { label: "WPM", value: wpm, color: "text-yellow-400" }), 
+                                h(ResultCard, { label: "ACC", value: `${accuracy}%`, color: "text-green-400" }), 
+                                h(ResultCard, { label: "Streak", value: maxStreak, color: "text-orange-400" }), 
+                                h(ResultCard, { label: "Chars", value: useGameStore.getState().correctCharsCount, color: "text-blue-400" })
+                            ),
+                            h('button', { 
+                                onClick: startRace, 
+                                className: "w-full py-4 bg-blue-500 text-white font-black rounded-xl hover:bg-blue-600 transition-all active:scale-95 flex items-center justify-center gap-2" 
+                            }, "RACE AGAIN", h(RotateCcw, { size: 16 })),
+                            h('button', { 
+                                onClick: resetGame, 
+                                className: "text-white/40 text-[10px] font-bold uppercase tracking-widest hover:text-white transition-colors" 
+                            }, "Back to Menu")
+                        )
+                    )
+                ),
+                
+                h('div', { className: "w-full flex justify-center pb-2" }, 
+                    h('div', { className: "bg-white/5 backdrop-blur-sm px-3 py-1 rounded-full border border-white/5 text-[8px] font-bold text-white/20 uppercase tracking-[0.2em]" }, "Optimized for Android WebView")
+                )
+            );
+        }
+
+        function App() {
+            return h('div', { className: "w-full h-screen bg-[#050505] overflow-hidden relative font-sans" },
+                h(Suspense, { fallback: null }, 
+                    h(Canvas, { shadows: true, dpr: [1, 1.5] }, // Lower DPR for better mobile performance
+                        h(GameScene, null)
+                    )
+                ),
+                h(Loader, null),
+                h(UI, null)
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(h(App));
+    </script>
+</body>
+</html>

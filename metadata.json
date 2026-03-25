@@ -1,0 +1,5 @@
+{
+  "name": "3D Typing Racer",
+  "description": "A mobile-optimized 3D racing game where your typing speed controls your car's velocity.",
+  "requestFramePermissions": []
+}
